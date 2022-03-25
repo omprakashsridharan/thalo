@@ -1,6 +1,7 @@
 //! Event store
 
 use async_trait::async_trait;
+use futures_util::{future::BoxFuture, stream::BoxStream};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
@@ -9,99 +10,55 @@ use crate::{
 };
 
 /// Used to store & load events.
-#[async_trait]
+///
+/// Trait inspired by [eventually::EventStore](https://docs.rs/eventually/latest/eventually/trait.EventStore.html).
 pub trait EventStore {
+    /// The aggregate ID.
+    type AggregateId;
+
+    /// Event type before stored.
+    type Event;
+
+    /// Stored event type.
+    type PersistedEvent;
+
     /// The error type.
     type Error;
 
-    /// Loads an aggregate by replaying all events.
-    async fn execute<A, C, R>(&self, id: <A as Aggregate>::ID, cmd: C) -> Result<R, Self::Error>
-    where
-        A: Aggregate + Send + Sync,
-        <A as Aggregate>::ID: Clone,
-        <A as Aggregate>::Event: Clone + DeserializeOwned + Serialize,
-        C: (FnOnce(&A) -> R) + Send,
-        R: Clone + IntoEvents<<A as Aggregate>::Event> + Send,
-    {
-        let aggregate = self
-            .load_aggregate::<A>(id.clone())
-            .await?
-            .unwrap_or_else(|| A::new(id));
+    /// Append events to the event store.
+    fn append(
+        &mut self,
+        aggregate_id: Self::AggregateId,
+        events: &[Self::Event],
+    ) -> BoxFuture<Result<Vec<u64>, Self::Error>>;
 
-        let result = cmd(&aggregate);
-        let events = result.clone().into_events();
+    /// Stream events from the event store.
+    fn stream(
+        &self,
+        aggregate_id: Self::AggregateId,
+        select: Select,
+    ) -> BoxStream<Result<Self::PersistedEvent, Self::Error>>;
 
-        self.save_events::<A>(aggregate.id(), &events).await?;
+    /// Stream all events from the event store.
+    fn stream_all(&self, select: Select) -> BoxStream<Result<Self::PersistedEvent, Self::Error>>;
+}
 
-        Ok(result)
-    }
-
-    /// Load events for a given aggregate.
+/// Selection operation for the events to capture in an [`EventStream`].
+///
+/// [`EventStream`]: type.EventStream.html
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Select {
+    /// To return all the [`Event`]s in the [`EventStream`].
     ///
-    /// Query is filtered by aggregate id and sequence.
-    async fn load_events<A>(
-        &self,
-        id: Option<&<A as Aggregate>::ID>,
-    ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
-    where
-        A: Aggregate,
-        <A as Aggregate>::Event: DeserializeOwned;
+    /// [`Event`]: trait.EventStore.html#associatedtype.Event
+    /// [`EventStream`]: type.EventStream.html
+    All,
 
-    /// Load events by ids.
-    async fn load_event_by_id<A>(
-        &self,
-        id: usize,
-    ) -> Result<Option<AggregateEventEnvelope<A>>, Self::Error>
-    where
-        A: Aggregate,
-        <A as Aggregate>::Event: DeserializeOwned,
-    {
-        Ok(self.load_events_by_id::<A>(&[id]).await?.into_iter().next())
-    }
-
-    /// Load events by ids.
-    async fn load_events_by_id<A>(
-        &self,
-        ids: &[usize],
-    ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
-    where
-        A: Aggregate,
-        <A as Aggregate>::Event: DeserializeOwned;
-
-    /// Loads an aggregate by replaying all events.
-    async fn load_aggregate<A>(&self, id: <A as Aggregate>::ID) -> Result<Option<A>, Self::Error>
-    where
-        A: Aggregate,
-        <A as Aggregate>::Event: DeserializeOwned,
-    {
-        let events = self.load_events::<A>(Some(&id)).await?;
-        if events.is_empty() {
-            return Ok(None);
-        }
-
-        let mut aggregate = <A as Aggregate>::new(id);
-        for EventEnvelope { event, .. } in events {
-            aggregate.apply(event);
-        }
-
-        Ok(Some(aggregate))
-    }
-
-    /// Loads an aggregates latest sequence.
-    async fn load_aggregate_sequence<A>(
-        &self,
-        id: &<A as Aggregate>::ID,
-    ) -> Result<Option<usize>, Self::Error>
-    where
-        A: Aggregate;
-
-    /// Saves events for a given aggregate instance.
-    async fn save_events<A>(
-        &self,
-        id: &<A as Aggregate>::ID,
-        events: &[<A as Aggregate>::Event],
-    ) -> Result<Vec<usize>, Self::Error>
-    where
-        A: Aggregate,
-        <A as Aggregate>::Event: Serialize;
+    /// To return a slice of the [`EventStream`], starting from
+    /// those [`Event`]s with version **greater or equal** than
+    /// the one specified in this variant.
+    ///
+    /// [`Event`]: trait.EventStore.html#associatedtype.Event
+    /// [`EventStream`]: type.EventStream.html
+    From(u64),
 }

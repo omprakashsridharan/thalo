@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{fmt::Write, marker::PhantomData};
 
 use async_trait::async_trait;
 use bb8_postgres::{
@@ -10,7 +10,9 @@ use bb8_postgres::{
     },
     PostgresConnectionManager,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use chrono::{DateTime, FixedOffset};
+use futures_util::{future::BoxFuture, stream::BoxStream, FutureExt};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thalo::{
     aggregate::{Aggregate, TypeId},
     event::{AggregateEventEnvelope, EventType},
@@ -27,7 +29,7 @@ const SAVE_EVENTS_QUERY: &str = include_str!("queries/save_events.sql");
 
 /// Postgres event store implementation.
 #[derive(Clone)]
-pub struct PgEventStore<Tls>
+pub struct PgEventStore<Tls, I, E>
 where
     Tls: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
     <Tls as MakeTlsConnect<Socket>>::Stream: Send + Sync,
@@ -35,9 +37,11 @@ where
     <<Tls as MakeTlsConnect<Socket>>::TlsConnect as TlsConnect<Socket>>::Future: Send,
 {
     pool: Pool<PostgresConnectionManager<Tls>>,
+    id: PhantomData<I>,
+    event: PhantomData<E>,
 }
 
-impl<Tls> PgEventStore<Tls>
+impl<Tls, I, E> PgEventStore<Tls, I, E>
 where
     Tls: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
     <Tls as MakeTlsConnect<Socket>>::Stream: Send + Sync,
@@ -52,24 +56,25 @@ where
         let manager = PostgresConnectionManager::new_from_stringlike(uri, tls)?;
         let pool = Pool::builder().build(manager).await?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            id: PhantomData::default(),
+            event: PhantomData::default(),
+        })
     }
 }
 
-#[async_trait]
-impl<Tls> EventStore for PgEventStore<Tls>
+impl<Tls, I, E> PgEventStore<Tls, I, E>
 where
     Tls: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
     <Tls as MakeTlsConnect<Socket>>::Stream: Send + Sync,
     <Tls as MakeTlsConnect<Socket>>::TlsConnect: Send,
     <<Tls as MakeTlsConnect<Socket>>::TlsConnect as TlsConnect<Socket>>::Future: Send,
 {
-    type Error = Error;
-
     async fn load_events<A>(
         &self,
         id: Option<&<A as Aggregate>::ID>,
-    ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
+    ) -> Result<Vec<AggregateEventEnvelope<A>>, Error>
     where
         A: Aggregate,
         <A as Aggregate>::Event: DeserializeOwned,
@@ -86,18 +91,18 @@ where
         Ok(rows
             .into_iter()
             .map(|row| {
-                let event_id = row.get::<_, i64>(0) as usize;
+                let event_id = row.get::<_, i64>(0) as u64;
 
                 let event_json = row.get(5);
                 let event = serde_json::from_value(event_json)
                     .map_err(|err| Error::DeserializeDbEvent(event_id, err))?;
 
-                Result::<_, Self::Error>::Ok(AggregateEventEnvelope::<A> {
+                Result::<_, Error>::Ok(AggregateEventEnvelope::<A> {
                     id: event_id,
                     created_at: row.get(1),
                     aggregate_type: row.get(2),
                     aggregate_id: row.get(3),
-                    sequence: row.get::<_, i64>(4) as usize,
+                    sequence: row.get::<_, i64>(4) as u64,
                     event,
                 })
             })
@@ -107,7 +112,7 @@ where
     async fn load_events_by_id<A>(
         &self,
         ids: &[usize],
-    ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
+    ) -> Result<Vec<AggregateEventEnvelope<A>>, Error>
     where
         A: Aggregate,
         <A as Aggregate>::Event: DeserializeOwned,
@@ -128,18 +133,18 @@ where
         Ok(rows
             .into_iter()
             .map(|row| {
-                let event_id = row.get::<_, i64>(0) as usize;
+                let event_id = row.get::<_, i64>(0) as u64;
 
                 let event_json = row.get(5);
                 let event = serde_json::from_value(event_json)
                     .map_err(|err| Error::DeserializeDbEvent(event_id, err))?;
 
-                Result::<_, Self::Error>::Ok(AggregateEventEnvelope::<A> {
+                Result::<_, Error>::Ok(AggregateEventEnvelope::<A> {
                     id: event_id,
                     created_at: row.get(1),
                     aggregate_type: row.get(2),
                     aggregate_id: row.get(3),
-                    sequence: row.get::<_, i64>(4) as usize,
+                    sequence: row.get::<_, i64>(4) as u64,
                     event,
                 })
             })
@@ -149,7 +154,7 @@ where
     async fn load_aggregate_sequence<A>(
         &self,
         id: &<A as Aggregate>::ID,
-    ) -> Result<Option<usize>, Self::Error>
+    ) -> Result<Option<usize>, Error>
     where
         A: Aggregate,
     {
@@ -171,7 +176,7 @@ where
         &self,
         id: &<A as Aggregate>::ID,
         events: &[<A as Aggregate>::Event],
-    ) -> Result<Vec<usize>, Self::Error>
+    ) -> Result<Vec<usize>, Error>
     where
         A: Aggregate,
         <A as Aggregate>::Event: Serialize,
@@ -226,6 +231,236 @@ where
         Ok(event_ids)
     }
 }
+
+impl<Tls, I, E> EventStore for PgEventStore<Tls, I, E>
+where
+    Tls: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
+    <Tls as MakeTlsConnect<Socket>>::Stream: Send + Sync,
+    <Tls as MakeTlsConnect<Socket>>::TlsConnect: Send,
+    <<Tls as MakeTlsConnect<Socket>>::TlsConnect as TlsConnect<Socket>>::Future: Send,
+{
+    type AggregateId = I;
+    type Event = E;
+    type PersistedEvent = PersistedEvent<E>;
+    type Error = Error;
+
+    fn append(
+        &mut self,
+        aggregate_id: Self::AggregateId,
+        events: &[Self::Event],
+    ) -> BoxFuture<Result<Vec<u64>, Self::Error>> {
+        if events.is_empty() {
+            return async move { Ok(Vec::new()) }.boxed();
+        }
+
+        let sequence = self.load_aggregate_sequence::<A>(id).await?;
+
+        todo!()
+    }
+
+    fn stream(
+        &self,
+        aggregate_id: Self::AggregateId,
+        select: thalo::event_store::Select,
+    ) -> BoxStream<Result<Self::PersistedEvent, Self::Error>> {
+        todo!()
+    }
+
+    fn stream_all(
+        &self,
+        select: thalo::event_store::Select,
+    ) -> BoxStream<Result<Self::PersistedEvent, Self::Error>> {
+        todo!()
+    }
+}
+
+/// An event with additional metadata.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PersistedEvent<E> {
+    /// Auto-incrementing event id.
+    pub id: u64,
+    /// Event timestamp.
+    pub created_at: DateTime<FixedOffset>,
+    /// Aggregate type identifier.
+    pub aggregate_type: String,
+    /// Aggregate instance identifier.
+    pub aggregate_id: String,
+    /// Incrementing number unique where each aggregate instance starts from 0.
+    pub sequence: u64,
+    /// Event data
+    pub event: E,
+}
+
+// #[async_trait]
+// impl<Tls> EventStore for PgEventStore<Tls>
+// where
+//     Tls: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
+//     <Tls as MakeTlsConnect<Socket>>::Stream: Send + Sync,
+//     <Tls as MakeTlsConnect<Socket>>::TlsConnect: Send,
+//     <<Tls as MakeTlsConnect<Socket>>::TlsConnect as TlsConnect<Socket>>::Future: Send,
+// {
+//     type Error = Error;
+
+//     async fn load_events<A>(
+//         &self,
+//         id: Option<&<A as Aggregate>::ID>,
+//     ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
+//     where
+//         A: Aggregate,
+//         <A as Aggregate>::Event: DeserializeOwned,
+//     {
+//         let conn = self.pool.get().await.map_err(Error::GetDbPoolConnection)?;
+
+//         let rows = conn
+//             .query(
+//                 LOAD_EVENTS_QUERY,
+//                 &[&<A as TypeId>::type_id(), &id.map(|id| id.to_string())],
+//             )
+//             .await?;
+
+//         Ok(rows
+//             .into_iter()
+//             .map(|row| {
+//                 let event_id = row.get::<_, i64>(0) as usize;
+
+//                 let event_json = row.get(5);
+//                 let event = serde_json::from_value(event_json)
+//                     .map_err(|err| Error::DeserializeDbEvent(event_id, err))?;
+
+//                 Result::<_, Self::Error>::Ok(AggregateEventEnvelope::<A> {
+//                     id: event_id,
+//                     created_at: row.get(1),
+//                     aggregate_type: row.get(2),
+//                     aggregate_id: row.get(3),
+//                     sequence: row.get::<_, i64>(4) as usize,
+//                     event,
+//                 })
+//             })
+//             .collect::<Result<Vec<_>, _>>()?)
+//     }
+
+//     async fn load_events_by_id<A>(
+//         &self,
+//         ids: &[usize],
+//     ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
+//     where
+//         A: Aggregate,
+//         <A as Aggregate>::Event: DeserializeOwned,
+//     {
+//         let conn = self.pool.get().await.map_err(Error::GetDbPoolConnection)?;
+
+//         let rows = conn
+//             .query(
+//                 LOAD_EVENTS_BY_ID_QUERY,
+//                 &[&ids
+//                     .iter()
+//                     .map(|id| id.to_string())
+//                     .collect::<Vec<_>>()
+//                     .join(",")],
+//             )
+//             .await?;
+
+//         Ok(rows
+//             .into_iter()
+//             .map(|row| {
+//                 let event_id = row.get::<_, i64>(0) as usize;
+
+//                 let event_json = row.get(5);
+//                 let event = serde_json::from_value(event_json)
+//                     .map_err(|err| Error::DeserializeDbEvent(event_id, err))?;
+
+//                 Result::<_, Self::Error>::Ok(AggregateEventEnvelope::<A> {
+//                     id: event_id,
+//                     created_at: row.get(1),
+//                     aggregate_type: row.get(2),
+//                     aggregate_id: row.get(3),
+//                     sequence: row.get::<_, i64>(4) as usize,
+//                     event,
+//                 })
+//             })
+//             .collect::<Result<Vec<_>, _>>()?)
+//     }
+
+//     async fn load_aggregate_sequence<A>(
+//         &self,
+//         id: &<A as Aggregate>::ID,
+//     ) -> Result<Option<usize>, Self::Error>
+//     where
+//         A: Aggregate,
+//     {
+//         let conn = self.pool.get().await.map_err(Error::GetDbPoolConnection)?;
+
+//         let row = conn
+//             .query_one(
+//                 LOAD_AGGREGATE_SEQUENCE_QUERY,
+//                 &[&<A as TypeId>::type_id(), &id.to_string()],
+//             )
+//             .await?;
+
+//         Ok(row
+//             .get::<_, Option<i64>>(0)
+//             .map(|sequence| sequence as usize))
+//     }
+
+//     async fn save_events<A>(
+//         &self,
+//         id: &<A as Aggregate>::ID,
+//         events: &[<A as Aggregate>::Event],
+//     ) -> Result<Vec<usize>, Self::Error>
+//     where
+//         A: Aggregate,
+//         <A as Aggregate>::Event: Serialize,
+//     {
+//         if events.is_empty() {
+//             return Ok(vec![]);
+//         }
+
+//         let sequence = self.load_aggregate_sequence::<A>(id).await?;
+
+//         let (query, values) = create_insert_events_query::<A>(id, sequence, events)?;
+
+//         let mut conn = self.pool.get().await.map_err(Error::GetDbPoolConnection)?;
+
+//         let transaction = conn
+//             .build_transaction()
+//             .isolation_level(IsolationLevel::ReadCommitted)
+//             .start()
+//             .await?;
+
+//         let rows = transaction
+//             .query(
+//                 &query,
+//                 &values
+//                     .iter()
+//                     .map(|value| value.as_ref() as &(dyn ToSql + Sync))
+//                     .collect::<Vec<_>>(),
+//             )
+//             .await?;
+
+//         let event_ids: Vec<_> = rows
+//             .into_iter()
+//             .map(|row| row.get::<_, i64>(0) as usize)
+//             .collect();
+//         let query = create_insert_outbox_events_query(&event_ids);
+
+//         transaction
+//             .execute(
+//                 &query,
+//                 &event_ids
+//                     .iter()
+//                     .map(|event_id| *event_id as i64)
+//                     .collect::<Vec<_>>()
+//                     .iter()
+//                     .map(|event_id| event_id as &(dyn ToSql + Sync))
+//                     .collect::<Vec<_>>(),
+//             )
+//             .await?;
+
+//         transaction.commit().await?;
+
+//         Ok(event_ids)
+//     }
+// }
 
 fn create_insert_events_query<A>(
     id: &<A as Aggregate>::ID,
