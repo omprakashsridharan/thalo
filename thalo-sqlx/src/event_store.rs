@@ -34,7 +34,7 @@ impl SqlEventStore {
 struct LoadEventsRow {
     pub id: i64,
     #[sqlx]
-    pub created_at: DateTime<FixedOffset>,
+    pub created_at: String,
     pub aggregate_type: String,
     pub aggregate_id: String,
     pub sequence: i64,
@@ -53,12 +53,13 @@ impl EventStore for SqlEventStore {
         A: Aggregate,
         <A as Aggregate>::Event: DeserializeOwned,
     {
-        let row: Vec<LoadEventsRow> = sqlx::query_as("src/queries/load_events.sql")
+        let rows: Vec<LoadEventsRow> = sqlx::query_as(LOAD_EVENTS_QUERY)
             .bind(&<A as TypeId>::type_id())
             .bind(&id.map(|id| id.to_string()))
             .fetch_all(&self.pool)
             .await
             .unwrap();
+        println!("{:?}", rows);
         todo!()
     }
 

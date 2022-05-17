@@ -1,7 +1,7 @@
 //! Thalo Postgres
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 
-// pub use event_store::SqlEventStore;
+pub use event_store::SqlEventStore;
 
 mod event_store;
