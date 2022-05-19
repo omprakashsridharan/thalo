@@ -1,5 +1,5 @@
-use sqlx::{any::AnyConnectOptions, sqlite::SqliteConnectOptions};
-use std::str::FromStr;
+use sea_orm::{ConnectOptions, DbErr};
+
 use thalo::{
     aggregate::{Aggregate, TypeId},
     event_store::EventStore,
@@ -73,10 +73,11 @@ impl BankAccountCommand for BankAccount {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), sqlx::Error> {
+async fn main() -> Result<(), DbErr> {
     println!("hello-world");
-    let sqlite_connect_options: AnyConnectOptions =
-        SqliteConnectOptions::from_str("sqlite::memory:")?.into();
+    let sqlite_connect_options: ConnectOptions =
+        ConnectOptions::new("sqlite::memory:".to_owned());
+        
     let sql_event_store = SqlEventStore::connect(sqlite_connect_options).await?;
     let x = sql_event_store.load_events::<BankAccount>(None).await;
     Ok(())

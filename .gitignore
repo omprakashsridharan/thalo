@@ -2,3 +2,14 @@
 *.env
 **/.DS_Store
 *.code-workspace
+.idea/.gitignore
+.idea/misc.xml
+.idea/modules.xml
+.idea/thalo.iml
+.idea/vcs.xml
+.idea/codeStyles/codeStyleConfig.xml
+.idea/codeStyles/Project.xml
+.idea/libraries/p_common__plat_windows__arch_win32__bldtype_Release.xml
+.idea/libraries/p_common__plat_windows__arch_win32__bldtype_Release1.xml
+.idea/libraries/p_common__plat_windows__arch_x64__bldtype_Release.xml
+.idea/libraries/p_common__plat_windows__arch_x64__bldtype_Release1.xml
