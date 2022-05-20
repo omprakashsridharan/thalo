@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use sea_orm::{Database, DatabaseConnection, ConnectOptions, error::DbErr, QueryFilter, ColumnTrait};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use sea_orm::EntityTrait;
+use crate::migration::{Migrator, MigratorTrait};
 
-use crate::{entities::event::{self, Model as EventModel,Entity as EventEntity}, Error};
+
+use crate::{entity::event::{self, Model as EventModel,Entity as EventEntity}, Error};
 
 use thalo::{
     aggregate::{Aggregate, TypeId},
@@ -19,6 +21,7 @@ pub struct SqlEventStore {
 impl SqlEventStore {
     pub async fn connect(connect_options: ConnectOptions) -> Result<Self, DbErr> {
         let db = Database::connect(connect_options).await?;
+        Migrator::up(&db, None).await?;
         Ok(Self { db })
     }
 }
@@ -60,7 +63,7 @@ impl EventStore for SqlEventStore {
 
     async fn load_events_by_id<A>(
         &self,
-        ids: &[u64],
+        _ids: &[u64],
     ) -> Result<Vec<AggregateEventEnvelope<A>>, Self::Error>
     where
         A: Aggregate,
@@ -71,7 +74,7 @@ impl EventStore for SqlEventStore {
 
     async fn load_aggregate_sequence<A>(
         &self,
-        id: &<A as Aggregate>::ID,
+        _id: &<A as Aggregate>::ID,
     ) -> Result<Option<u64>, Self::Error>
     where
         A: Aggregate,
@@ -81,8 +84,8 @@ impl EventStore for SqlEventStore {
 
     async fn save_events<A>(
         &self,
-        id: &<A as Aggregate>::ID,
-        events: &[<A as Aggregate>::Event],
+        _id: &<A as Aggregate>::ID,
+        _events: &[<A as Aggregate>::Event],
     ) -> Result<Vec<u64>, Self::Error>
     where
         A: Aggregate,

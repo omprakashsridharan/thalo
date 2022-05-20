@@ -7,16 +7,15 @@ repository = "https://github.com/thalo-rs/thalo"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "thalosqlxlib"
+name = "thalosqllib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "thalo-sqlx"
+name = "thalo-sql"
 path = "src/bin.rs"
 
 [dependencies]
 async-trait = "0.1.53"
-sqlx = { version = "0.5", features = [ "all", "runtime-tokio-rustls" ] }
 thalo = { version = "0.5.0", path = "../thalo", features = [
   "event-store",
   "tests-cfg",
@@ -27,6 +26,7 @@ chrono = "0.4.19"
 tokio = { version = "1.18.2", features=["full"] }
 sea-orm = { version = "^0", features = [ "sqlx-mysql","sqlx-postgres","sqlx-sqlite", "runtime-tokio-rustls", "macros" ] }
 thiserror = "1.0.31"
+sea-orm-migration = { version = "^0" }
 
 [build-dependencies]
 esdl = { version = "0.4", features = ["codegen-rust"] }
