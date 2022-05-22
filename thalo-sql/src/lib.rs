@@ -2,10 +2,10 @@
 
 // #![deny(missing_docs)]
 
-pub use event_store::SqlEventStore;
 pub use error::Error;
+pub use event_store::SqlEventStore;
 
-mod event_store;
 mod entity;
 mod error;
+mod event_store;
 mod migration;

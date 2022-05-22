@@ -9,12 +9,10 @@ pub struct Model {
     pub aggregate_type: String,
     pub aggregate_id: String,
     pub sequence: u64,
-    pub event_data: Json
+    pub event_data: Json,
 }
-
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-}
+pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

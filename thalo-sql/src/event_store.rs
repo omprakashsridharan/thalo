@@ -4,7 +4,7 @@ use sea_orm::sea_query::Expr;
 use sea_orm::{
     error::DbErr, ColumnTrait, ConnectOptions, Database, DatabaseConnection, QueryFilter,
 };
-use sea_orm::{Condition, EntityTrait};
+use sea_orm::{Condition, EntityTrait, FromQueryResult, QuerySelect};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
@@ -29,6 +29,11 @@ impl SqlEventStore {
         Migrator::up(&db, None).await?;
         Ok(Self { db })
     }
+}
+
+#[derive(FromQueryResult)]
+struct MaxSequence {
+    sequence: u64,
 }
 
 #[async_trait]
@@ -104,12 +109,22 @@ impl EventStore for SqlEventStore {
 
     async fn load_aggregate_sequence<A>(
         &self,
-        _id: &<A as Aggregate>::ID,
+        id: &<A as Aggregate>::ID,
     ) -> Result<Option<u64>, Self::Error>
     where
         A: Aggregate,
     {
-        todo!()
+        let max_sequences = event::Entity::find()
+            .column_as(event::Column::Id.max(), "sequence_max")
+            .filter(event::Column::AggregateType.eq(id.to_string()))
+            .into_model::<MaxSequence>()
+            .all(&self.db)
+            .await
+            .unwrap();
+        if max_sequences.len() > 0 {
+            return Ok(Some(max_sequences.get(0).unwrap().sequence));
+        }
+        Ok(None)
     }
 
     async fn save_events<A>(

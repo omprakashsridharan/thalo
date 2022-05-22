@@ -1,5 +1,5 @@
-use thiserror::Error;
 use sea_orm::error::DbErr;
+use thiserror::Error;
 
 /// Error enum.
 #[derive(Debug, Error)]
