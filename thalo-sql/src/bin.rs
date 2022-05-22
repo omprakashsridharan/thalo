@@ -1,11 +1,11 @@
-use sea_orm::{ConnectOptions};
+use sea_orm::ConnectOptions;
 
 use thalo::{
     aggregate::{Aggregate, TypeId},
     event_store::EventStore,
     include_aggregate,
 };
-use thalosqllib::{SqlEventStore};
+use thalosqllib::SqlEventStore;
 
 include_aggregate!("BankAccount");
 
@@ -75,12 +75,11 @@ impl BankAccountCommand for BankAccount {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("hello-world");
-    let sqlite_connect_options: ConnectOptions =
-        ConnectOptions::new("sqlite::memory:".to_owned());
-        
+    let sqlite_connect_options: ConnectOptions = ConnectOptions::new("sqlite::memory:".to_owned());
+
     let sql_event_store = SqlEventStore::connect(sqlite_connect_options).await?;
     let x = sql_event_store.load_events::<BankAccount>(None).await?;
-    println!("{:?}",x);
+    println!("{:?}", x);
     Ok(())
 }
 
