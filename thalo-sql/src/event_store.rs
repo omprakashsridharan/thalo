@@ -2,10 +2,11 @@ use crate::migration::{Migrator, MigratorTrait};
 use async_trait::async_trait;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    error::DbErr, ColumnTrait, ConnectOptions, Database, DatabaseConnection, QueryFilter,
+    error::DbErr, ColumnTrait, ConnectOptions, Database, DatabaseConnection, QueryFilter, Set,
 };
-use sea_orm::{Condition, EntityTrait, FromQueryResult, QuerySelect};
+use sea_orm::{Condition, EntityTrait, FromQueryResult, QuerySelect, TransactionTrait};
 use serde::{de::DeserializeOwned, Serialize};
+use thalo::event::EventType;
 
 use crate::{
     entity::event::{self, Entity as EventEntity, Model as EventModel},
@@ -129,13 +130,31 @@ impl EventStore for SqlEventStore {
 
     async fn save_events<A>(
         &self,
-        _id: &<A as Aggregate>::ID,
-        _events: &[<A as Aggregate>::Event],
+        id: &<A as Aggregate>::ID,
+        events: &[<A as Aggregate>::Event],
     ) -> Result<Vec<u64>, Self::Error>
     where
         A: Aggregate,
         <A as Aggregate>::Event: Serialize,
     {
-        todo!()
+        let sequence = self.load_aggregate_sequence::<A>(id).await?.unwrap_or(0);
+        let txn = (&self.db).begin().await?;
+
+        let mut event_models_to_be_save: Vec<event::ActiveModel> = vec![];
+        for (index, evt) in events.iter().enumerate() {
+            event_models_to_be_save.push(event::ActiveModel {
+                aggregate_type: Set(<A as TypeId>::type_id().to_string()),
+                aggregate_id: Set(id.to_string()),
+                sequence: Set(sequence + index as u64 + 1),
+                event_type: Set(String::from(evt.event_type())),
+                event_data: Set(serde_json::to_value(evt).map_err(Error::SerializeEvent)?),
+                ..Default::default()
+            })
+        }
+        let res = event::Entity::insert_many(event_models_to_be_save)
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
+        Ok(vec![res.last_insert_id])
     }
 }
