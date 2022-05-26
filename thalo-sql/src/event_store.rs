@@ -19,7 +19,6 @@ use thalo::{
     event_store::EventStore,
 };
 
-#[derive(Clone)]
 pub struct SqlEventStore {
     db: DatabaseConnection,
 }
@@ -27,8 +26,19 @@ pub struct SqlEventStore {
 impl SqlEventStore {
     pub async fn connect(connect_options: ConnectOptions) -> Result<Self, DbErr> {
         let db = Database::connect(connect_options).await?;
-        Migrator::up(&db, None).await?;
-        Ok(Self { db })
+        let this = Self { db };
+        this.migrate().await?;
+        Ok(this)
+    }
+
+    pub fn with_database_connection(db: DatabaseConnection) -> Result<Self, DbErr> {
+        let this = Self { db };
+        Ok(this)
+    }
+
+    async fn migrate(&self) -> Result<(), DbErr> {
+        Migrator::up(&self.db, None).await?;
+        Ok(())
     }
 }
 
@@ -155,6 +165,83 @@ impl EventStore for SqlEventStore {
             .exec(&txn)
             .await?;
         txn.commit().await?;
-        Ok(vec![res.last_insert_id])
+        Ok(vec![res.last_insert_id as u64])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::collections::BTreeMap;
+
+    use sea_orm::{DatabaseBackend, MockDatabase, MockExecResult, Value};
+    use serde_json::json;
+    use thalo::{
+        aggregate::Aggregate,
+        event_store::EventStore,
+        tests_cfg::bank_account::{BankAccount, BankAccountEvent, OpenedAccountEvent},
+    };
+
+    use crate::{entity::event, SqlEventStore};
+
+    #[tokio::test]
+    async fn test_open_account() -> Result<(), super::Error> {
+        let (bank_account, event) = BankAccount::open_account(String::from("test1"), 10.0).unwrap();
+        let local_date_time = chrono::offset::Local::now();
+        let mock_connection = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results(vec![
+                // First query -> load_max_sequence
+                vec![BTreeMap::from([("sequence", Value::BigUnsigned(Some(10)))])],
+            ])
+            .append_exec_results(vec![MockExecResult {
+                last_insert_id: 1,
+                ..Default::default()
+            }])
+            .append_query_results(vec![
+                vec![event::Model {
+                    id: 1,
+                    created_at: local_date_time.with_timezone(local_date_time.offset()),
+                    aggregate_type: "test1".to_owned(),
+                    aggregate_id: "test1".to_owned(),
+                    sequence: 1,
+                    event_data: json!(BankAccountEvent::OpenedAccount(OpenedAccountEvent {
+                        balance: 10.0
+                    })),
+                    event_type: String::from(""),
+                }],
+                vec![event::Model {
+                    id: 1,
+                    created_at: local_date_time.with_timezone(local_date_time.offset()),
+                    aggregate_type: "test1".to_owned(),
+                    aggregate_id: "test1".to_owned(),
+                    sequence: 1,
+                    event_data: json!(BankAccountEvent::OpenedAccount(OpenedAccountEvent {
+                        balance: 10.0
+                    })),
+                    event_type: String::from(""),
+                }],
+            ])
+            .into_connection();
+
+        let sql_event_store = SqlEventStore::with_database_connection(mock_connection)?;
+
+        let _ids = sql_event_store
+            .save_events::<BankAccount>(bank_account.id(), &[event])
+            .await?;
+
+        let loaded_events = sql_event_store
+            .load_events::<BankAccount>(Some(bank_account.id()))
+            .await?;
+        let first_event = loaded_events.get(0).unwrap();
+        match &first_event.event {
+            BankAccountEvent::OpenedAccount(OpenedAccountEvent { balance }) => {
+                assert_eq!(balance, &10.0);
+            }
+            _ => {
+                println!("no match")
+            }
+        }
+
+        Ok(())
     }
 }

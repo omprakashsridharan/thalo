@@ -27,6 +27,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Column::AggregateType).string())
                     .col(ColumnDef::new(Column::CreatedAt).date_time().not_null())
                     .col(ColumnDef::new(Column::EventData).json().not_null())
+                    .col(ColumnDef::new(Column::EventType).string().not_null())
                     .col(ColumnDef::new(Column::Sequence).unsigned().not_null())
                     .to_owned(),
             )

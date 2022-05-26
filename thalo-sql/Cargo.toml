@@ -24,7 +24,7 @@ serde = "1.0"
 serde_json = "1.0"
 chrono = "0.4.19"
 tokio = { version = "1.18.2", features=["full"] }
-sea-orm = { version = "^0", features = [ "sqlx-mysql","sqlx-postgres","sqlx-sqlite", "runtime-tokio-rustls", "macros" ] }
+sea-orm = { version = "^0", features = [ "sqlx-mysql","sqlx-postgres","sqlx-sqlite", "runtime-tokio-rustls", "macros","mock" ] }
 thiserror = "1.0.31"
 sea-orm-migration = { version = "^0" }
 
